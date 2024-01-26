@@ -14,20 +14,20 @@ const Job = class {
         this.user = user;
         this.qty = qty;
         this.rate = rate;
-        this.isPrinted = false;
+        this.is_printed = false;
         this.allocations = [];
-        this.updateTimestamp();
+        this.update_timestamp();
         this.qty_printed = 0;
         this.number = parseInt(Math.random() * 1000000 + 1000000);
-        allocations?.forEach(a => this.add(a.qty, a));
+        allocations?.forEach(a => this.add_allocation(a.qty, a));
     }
-    updateTimestamp(){
+    update_timestamp(){
         this.timestamp = Date.now();
     }
     qty_allocated(){
         let amount = 0;
         this.allocations.forEach(a => {
-            if(this.isPrinted && this.timestamp < a.obj.timestamp) return;
+            if(this.is_printed && this.timestamp < a.obj.timestamp) return;
             if(this.rate == Job.RATE_BULK) {
                 if(a.obj.type == Allocation.TYPE_ORDER && a.obj.order.type == Order.TYPE_BULK) amount += a.amt;
                 if(a.obj.type == Allocation.TYPE_EXTRA_NHA) amount += a.amt;
@@ -41,7 +41,7 @@ const Job = class {
     qty_extra_printed(){
         let amount = 0;
         this.allocations.forEach(a => {
-            if(this.isPrinted && this.timestamp < a.obj.timestamp) return;
+            if(this.is_printed && this.timestamp < a.obj.timestamp) return;
             if(a.obj.type == Allocation.TYPE_EXTRA_NHA) amount += a.amt;
             if(a.obj.type == Allocation.TYPE_EXTRA_PW) amount += a.amt;
         });
@@ -57,26 +57,26 @@ const Job = class {
     qty_soaked_up(){
         let amount = 0;
         this.allocations.forEach(a => {
-            if(this.isPrinted && this.timestamp > a.obj.timestamp) return;
+            if(this.is_printed && this.timestamp > a.obj.timestamp) return;
             if(a.obj.type == Allocation.TYPE_ORDER) amount += a.amt;
         });
         return amount;
     }
-    add(qty, allocation){
+    add_allocation(qty, allocation){
         this.allocations.push({
             obj:allocation,
             amt:qty,
-            desc: function(jobTimestamp){
-                return this.obj.desc_from_pivot(this.amt, jobTimestamp);
+            line_type_desc: function(job_timestamp){
+                return this.obj.desc_from_pivot(this.amt, job_timestamp);
             },
         });
     }
     print(qty){
-        this.isPrinted = true;
+        this.is_printed = true;
         this.qty_printed = qty ? parseInt(qty) : this.qty_to_print();
-        this.updateTimestamp();
+        this.update_timestamp();
     }
-    desc(){
+    line_type_desc(){
         const timestamp = new Date(this.timestamp).toLocaleTimeString('en-us', { hour:"numeric", minute:"numeric", second:"numeric" });
         return tag('span', [
             tag('span.num', ''+this.qty_printed),
@@ -88,7 +88,7 @@ const Job = class {
             ]),
         ]);
     }
-    lineTypeClasses(){
+    line_type_classes(){
         return ['pw'];
     }
 };
@@ -104,14 +104,14 @@ const Allocation = class {
         this.timestamp = Date.now();
         this.user = user;
     }
-    desc_from_pivot(qty, jobTimestamp){
+    desc_from_pivot(qty, job_timestamp){
         let parts = [tag('span.num', '' + (qty ?? this.qty))];
         const timestamp = new Date(this.timestamp).toLocaleTimeString('en-us', { hour:"numeric", minute:"numeric", second:"numeric" });
         switch(this.type){
             case Allocation.TYPE_ORDER:
                 const order_type = (this.order.type == Order.TYPE_BULK) ? "Bulk" : "Additional"
                 parts.push(tag('span', ' for '+ order_type +' order '), tag('a', '#'+this.order.number, {'href':'#'}));
-                if(timestamp > jobTimestamp){
+                if(timestamp > job_timestamp){
                     // TODO: show how much was soaked up: NHA or PW
                 }
                 break;
@@ -125,15 +125,12 @@ const Allocation = class {
         ]));
         return tag('span', parts);
     }
-    isForPageworks(){
-        return (this.type == Allocation.TYPE_EXTRA_PW);
-    }
-    lineTypeClasses(jobTimestamp){
-        if(this.isForPageworks()) return ['pw'];
+    line_type_classes(job_timestamp){
+        if(this.type == Allocation.TYPE_EXTRA_PW) return ['pw'];
         
         // if timestamp of allocation is after the job timestamp (time of printing),
         // the allocation must be here to soak up extra allocated units
-        if(this.timestamp > jobTimestamp) return ['delegated'];
+        if(this.timestamp > job_timestamp) return ['delegated'];
 
         return ['bulk-allocation'];
     }
@@ -159,18 +156,18 @@ const Year = class {
         this.hidden = true;
     }
     // #region Public interface
-    addJob(job){
+    add_job(job){
         this.jobs.push(job);
     }
-    addOrder(order){
+    add_order(order){
         this.orders.push(order);
     }
-    addAllocation(allocation){
+    add_allocation(allocation){
         this.allocations.push(allocation);
     }
     // calculates the distribution of allocations against printed jobs
     // any undelegated portions are added to an unprinted (and unstored) job 
-    get_jobs(returnUnprintedJob=false){
+    get_jobs(return_unprinted_job=false){
         // this method determines how each allocation is distributed
         // across the printed jobs -- any left over allocations assigned
         // to a future, unprinted job
@@ -179,69 +176,67 @@ const Year = class {
         // it only needs to parse a single year's data
         const jobs = this.jobs.slice();
         const RATE = jobs.length > 0 ? Job.RATE_ONDEMAND : Job.RATE_BULK;
-        const unprintedJob = new Job(data.current_user, 0, RATE, []);
+        const unprinted_job = new Job(data.current_user, 0, RATE, []);
         this.allocations.forEach(a => {
-            let delegatedToJob = 0;
+            let delegated_to_jobs = 0;
             jobs.forEach(j => {
-                const printed = j.isPrinted ? j.qty_printed : j.qty_to_print();
                 let printed_but_unallocated = j.qty_extra_printed() - j.qty_soaked_up();
                 const pivot = j.allocations.filter(a2 => a2.obj == a)[0]??null;
                 if(pivot){
                     // job already has a portion of this allocation
-                    delegatedToJob += pivot.amt;
+                    delegated_to_jobs += pivot.amt;
                     printed_but_unallocated -= pivot.amt;
                 } else if (printed_but_unallocated > 0) {
                     // if the job can absorb some of the allocation
                     // determine how much could be delegated to this job
                     let take = Math.min(printed_but_unallocated, a.qty);
                     printed_but_unallocated -= take;
-                    delegatedToJob += take;
-                    j.add(take, a);
+                    delegated_to_jobs += take;
+                    j.add_allocation(take, a);
                 }
             });
             // how much is left to delegate of this allocation
-            const leftToDelegate = a.qty - delegatedToJob;
+            const remainder_to_delegate = a.qty - delegated_to_jobs;
             // add any remainder to the unprinted job
-            if(leftToDelegate > 0) {
+            if(remainder_to_delegate > 0) {
                 // if job contains a bulk order, the job is at the bulk rate
                 if(a.type == Allocation.TYPE_ORDER && a.order.type == Order.TYPE_BULK) {
-                    unprintedJob.rate = Job.RATE_BULK;
+                    unprinted_job.rate = Job.RATE_BULK;
                 }
-                unprintedJob.add(leftToDelegate, a);
+                unprinted_job.add_allocation(remainder_to_delegate, a);
             }
         });
-        return returnUnprintedJob ? unprintedJob : [...jobs, unprintedJob];
+        return return_unprinted_job ? unprinted_job : [...jobs, unprinted_job];
     }
     make_allocation(){
-        const existingAllocation = this.allocations.find(a => a.type == Allocation.TYPE_EXTRA_NHA);
-        let allocateAmount = 0;
-        if(existingAllocation){
-            allocateAmount = window.prompt("How much total EXTRA should we print for NHA this year?", existingAllocation.qty);
+        const existing_allocation = this.allocations.find(a => a.type == Allocation.TYPE_EXTRA_NHA);
+        let amount = 0;
+        if(existing_allocation){
+            amount = window.prompt("How much total EXTRA should we print for NHA this year?", existing_allocation.qty);
         } else {
-            allocateAmount = window.prompt("How much EXTRA should we print for NHA?\n • 0 to cancel", 0);
+            amount = window.prompt("How much EXTRA should we print for NHA?\n • 0 to cancel", 0);
         }
-        if (allocateAmount > 0) {
+        if (amount > 0) {
             // find an existing allocation of TYPE_EXTRA_NHA for this year
-            if(existingAllocation) {
-                existingAllocation.qty = allocateAmount;
+            if(existing_allocation) {
+                existing_allocation.qty = amount;
             } else {
-                this.addAllocation(new Allocation(data.current_user, allocateAmount, Allocation.TYPE_EXTRA_NHA));
+                this.add_allocation(new Allocation(data.current_user, amount, Allocation.TYPE_EXTRA_NHA));
             }
             render_page();
         }
     }
     print_job(qty = 0){
-        const newJob = this.get_jobs(true);
-        const q =  newJob.qty_to_print();
+        const job = this.get_jobs(true);
+        const q =  job.qty_to_print();
         const secondPart = "\n • " + (q > 0 ?  "any more than " + q : "all") + " will be allocated to PW";
-        const printAmount = window.prompt("Print how much?" + secondPart + "\n • 0 to cancel", q);
-        if (printAmount > 0) {
-            if(printAmount > q){
-                const amt = printAmount - q;
-                newJob.add(amt, new Allocation(data.current_user, amt, Allocation.TYPE_EXTRA_PW));
+        const amount = window.prompt("Print how much?" + secondPart + "\n • 0 to cancel", q);
+        if (amount > 0) {
+            if(amount > q){
+                job.add_allocation(amount - q, new Allocation(data.current_user, amount - q, Allocation.TYPE_EXTRA_PW));
             }
-            newJob.print(printAmount);
-            this.addJob(newJob);
+            job.print(amount);
+            this.add_job(job);
             render_page();
         }
     }
@@ -268,10 +263,10 @@ const Year = class {
                 const lineItems = [
                     // render the allocations delegated to this job
                     ...job.allocations.map(a => {
-                        return this.render_history_item(a.obj.lineTypeClasses(job.timestamp), a.desc(job.timestamp), a.obj.timestamp);
+                        return this.render_history_item(a.obj.line_type_classes(job.timestamp), a.line_type_desc(job.timestamp), a.obj.timestamp);
                     }),
                     // render the printings of this job
-                    job.isPrinted ? this.render_history_item(job.lineTypeClasses(), job.desc(), job.timestamp) : null,
+                    job.is_printed ? this.render_history_item(job.line_type_classes(), job.line_type_desc(), job.timestamp) : null,
                 ]
                 .filter(item => item != null)
                 .sort((a, b) => { 
@@ -281,10 +276,9 @@ const Year = class {
                     return 0; 
                 });
     
-                const showBttnJob = !job.isPrinted && data.current_user == "PW User";
-                const showBttnAllocate = !job.isPrinted && data.current_user == "NHA User" && job.rate == Job.RATE_BULK;
-                const allocateText = job.allocations.filter(a => a.obj.type == Allocation.TYPE_EXTRA_NHA).length == 0 ? "Allocate More" : "Edit Allocation";
-                const showJobId = job.isPrinted;
+                const show_bttn_job = !job.is_printed && data.current_user == "PW User";
+                const show_bttn_allocate = !job.is_printed && data.current_user == "NHA User" && job.rate == Job.RATE_BULK;
+                const allocate_text = job.allocations.filter(a => a.obj.type == Allocation.TYPE_EXTRA_NHA).length == 0 ? "Allocate More" : "Edit Allocation";
 
                 let pricing = '';
                 switch(job.rate){
@@ -299,7 +293,7 @@ const Year = class {
                             tag('span.pill.big', pricing),
                             tag('span', ' pricing'),
                         ]),
-                        tag('span.grow', job.isPrinted ? [
+                        tag('span.grow', job.is_printed ? [
                             tag('span.num', ''+job.qty_printed),
                             tag('span', ' printed'),
                         ] : [
@@ -307,14 +301,14 @@ const Year = class {
                             tag('span', ' to print'),
                         ]),
                         ,
-                        job.isPrinted ? tag('span.grow', [
+                        job.is_printed ? tag('span.grow', [
                             tag('span.num', job.qty_soaked_up() + ' / ' + job.qty_extra_printed()),
                             tag('span', ' absorbed'),
                         ]) : null,
                         tag('span', [
-                            showBttnJob ? tag('button', 'Make Job', {'onclick':()=>year.print_job()}) : null,
-                            showBttnAllocate ? tag('button', allocateText, {'onclick':()=>year.make_allocation()}) : null,
-                            showJobId ? tag('span.job-number', [
+                            show_bttn_job ? tag('button', 'Make Job', {'onclick':()=>year.print_job()}) : null,
+                            show_bttn_allocate ? tag('button', allocate_text, {'onclick':()=>year.make_allocation()}) : null,
+                            job.is_printed ? tag('span.job-number', [
                                 tag('span', 'Job '),
                                 tag('a', '#' + job.number, {'href':'#'}),
                             ]) : null,
@@ -440,8 +434,8 @@ const gui = {
     actions: {
         "Bulk order": (year, amt) => {
             const order = new Order("NHA User", amt, Order.TYPE_BULK);
-            year.addOrder(order);
-            year.addAllocation(order.allocation);
+            year.add_order(order);
+            year.add_allocation(order.allocation);
             // TODO: trigger inventory conversion
             // automatically convert PW inventory to NHA
             //  > if it's a Bulk order -> no markup
@@ -449,8 +443,8 @@ const gui = {
         },
         "Additional order": (year, amt) => {
             const order = new Order("NHA User", amt, Order.TYPE_ADDITIONAL);
-            year.addOrder(order);
-            year.addAllocation(order.allocation);
+            year.add_order(order);
+            year.add_allocation(order.allocation);
         },
     },
 };
