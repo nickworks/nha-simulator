@@ -2,23 +2,6 @@ const contents = get("#contents")[0];
 const toolbar = get("#toolbar")[0];
 const style = child(document.head, tag('style'));
 
-const Column = class {
-    constructor(name, desc, calc = null, code = []){
-        this.name = name;
-        this.desc = desc;
-        this.hidden = false;
-        this._calc = calc;
-        this.code = code;
-    }
-    calc(state){
-        if(this._calc){
-            state[this.name] = this._calc(state);
-        }
-    }
-    is_calc(){
-        return (this._calc) ? true : false;
-    }
-}
 const User = class { 
     constructor(name){
         this.name = name;
@@ -168,18 +151,14 @@ const Order = class {
     }
 };
 const Year = class {
-    constructor(year, actions){
+    constructor(year){
         this.year = year;
-        this.actions = actions ?? [];
         this.jobs = [];
         this.orders = [];
         this.allocations = [];
         this.hidden = true;
     }
     // #region Public interface
-    addAction(action){
-        this.actions.push(action);
-    }
     addJob(job){
         this.jobs.push(job);
     }
@@ -373,13 +352,10 @@ const Year = class {
     }
     // #endregion
 };
-// referenced before to indicate those fields that are currently calculated in the method below
-const product_service = ['ProductService->fetch_quantities_by_variant()'];
 // application state
 const data = {
     options: {
         display_allocations: true,
-        display_details: false,
     },
     sku: 'ABCD-1234',
     users:[],
@@ -400,24 +376,9 @@ const data = {
     },
     add_or_fetch_year(year){
         if(year in data.by_year) return data.by_year[year];
-        
-        const action = this.make_start_state();
-        const y = new Year(year, [action]);
+        const y = new Year(year);
         data.by_year[year] = y;
         return y;
-    },
-    make_start_state(){
-        const empty_vals = {};
-        tables.columns.forEach(f => {
-            empty_vals[f.name] = 0;
-        });
-        return empty_vals;
-    },
-    get_year(year){
-        const d = data.by_year[year] ?? [];
-        return (d.length > 0)
-            ? JSON.parse(JSON.stringify(d[d.length - 1]))
-            : data.make_start_state(year);
     },
 }
 // the toolbar
@@ -433,17 +394,14 @@ const gui = {
         const dd2 = tag('select.actions', Object.keys(gui.actions).map(n => tag('option', n)));
         const amt = tag('input.quantity', null, {"type": "number", "value": 0, "min": 0, "size": "4", "maxlength": "4"});
         const op1 = tag('input', null, {"type": "checkbox", "value": "yes", "id":"toggle1", "name":"display_allocations", "checked" : data.options.display_allocations});
-        const op2 = tag('input', null, {"type": "checkbox", "value": "yes", "id":"toggle2", "name":"display_details", "checked" : data.options.display_details});
-        op1.onclick = op2.onclick = () => {
+        op1.onclick = () => {
             data.options.display_allocations = op1.checked;
-            data.options.display_details = op2.checked;
             render_page();
         };
         toolbar.onsubmit = (e) => {
             e.preventDefault();
             gui.perform_action(dd1.value, dd2.value, amt.value);
             data.options.display_allocations = op1.checked;
-            data.options.display_details = op2.checked;
             return false;
         };
         const dd_user = tag('select.users', data.users.map(n => tag('option', n)));
@@ -463,8 +421,6 @@ const gui = {
                 tag('span', 'show'),
                 op1, // checkbox 1
                 tag('label', 'allocations', {'for':'toggle1'}),
-                op2, // checkbox 2
-                tag('label', 'details', {'for':'toggle2'}),
             ]),
         ]);
     },
@@ -475,48 +431,14 @@ const gui = {
         amt = parseInt(amt);
         try {
             const y = data.add_or_fetch_year(year);
-            const entry = data.make_start_state(year);
-            entry['desc'] = `${action} (${amt})`;
-
-            // call the action
-            calc(y, entry, amt);
-
-            // call each columns' calc()
-            tables.columns.forEach(c => c.calc(entry));
-            
+            calc(y, amt);
             render_page();
         } catch (e){
             alert(e);
         }
     },
     actions: {
-        /* deprecated -- unnecessary due to the wireframes
-        "NHA allocates extra on-hand":(year, obj, amt) => {
-            if(year.allocations.filter(a => a.type == Allocation.TYPE_EXTRA_NHA).length > 0){
-                throw new Error("NHA has already allocated extra on-hand for this year.");
-            }
-            obj['nha_preorder'] += amt;
-            year.addAction(obj);
-            year.addAllocation(new Allocation(data.current_user, amt, Allocation.TYPE_EXTRA_NHA));
-        },
-        "PW allocates extra on-hand":(year, obj, amt) => {
-            obj['pw_extra'] += amt;
-            year.addAction(obj);
-            year.addAllocation(new Allocation(data.current_user, amt, Allocation.TYPE_EXTRA_PW));
-        },
-        "PW print job": (year, obj, amt) => {
-            //if(obj['need_to_print'] < amt){
-            //    throw new Error("Not enough allocated");
-            //}
-            obj['produced'] += amt;
-            obj['in_production'] += amt;
-            year.addAction(obj);
-            year.print_job(amt);
-        },
-        */
-        "Bulk order": (year, obj, amt) => {
-            obj['ordered'] += amt;
-            year.addAction(obj);
+        "Bulk order": (year, amt) => {
             const order = new Order("NHA User", amt, Order.TYPE_BULK);
             year.addOrder(order);
             year.addAllocation(order.allocation);
@@ -525,153 +447,12 @@ const gui = {
             //  > if it's a Bulk order -> no markup
             //  > if it's an Additional order -> markup
         },
-        "Additional order": (year, obj, amt) => {
-            obj['ordered'] += amt;
-            year.addAction(obj);
+        "Additional order": (year, amt) => {
             const order = new Order("NHA User", amt, Order.TYPE_ADDITIONAL);
             year.addOrder(order);
             year.addAllocation(order.allocation);
         },
-        /* not needed for current demo
-        "PW receive inventory": (year, obj, amt) => {
-            obj['inv_nha'] += amt;
-            obj['received'] += amt;
-            if(obj['received'] > obj['produced']) obj['received'] = obj['produced'];
-            year.addAction(obj);
-        },
-        "PW pack shipment": (year, obj, amt) => {
-            if(obj['inv_nha'] + obj['inv_pw'] < amt){
-                throw new Error("Not enough inventory");
-            }
-            obj['packed'] += amt;
-            const amount_pulling_from_nha = Math.min(obj['inv_nha'], amt);
-            if(amount_pulling_from_nha < amt){
-                obj['inv_pw'] -= (amt - amount_pulling_from_nha);
-            }
-            obj['inv_nha'] -= amount_pulling_from_nha;
-            year.addAction(obj);
-        },
-        "PW send shipment": (year, obj, amt) => {
-            if(obj['packed'] < amt){
-                throw new Error("Not enough packed");
-            }
-            obj['shipped'] += amt;
-            obj['packed'] -= amt;
-            year.addAction(obj);
-        },
-        "PW void shipment": (year, obj, amt) => {
-        },
-        "PW converts inventory to NHA": (year, obj, amt) => {
-            if(amt > obj['inv_pw']){
-                throw new Error("Not enough in PW inventory");
-            }
-            obj['inv_nha'] += amt;
-            obj['inv_pw'] -= amt;
-            year.addAction(obj);
-        },
-        */
     },
-};
-// the original data view
-const tables = {
-    render: () => child(contents, tables.render_tables()),
-    render_tables: () =>  {
-        let rows = [];
-        for (const [yr, year] of Object.entries(data.by_year)) {
-            rows.push(tables.render_table(year))
-        }
-        return tag('details.year-tables.main', [
-            tag('summary', 'Details'),
-            gui.make_button('show all fields', ()=> tables.show_all_columns()),
-            ...rows,
-        ], {
-            'open': data.options.display_details ? 'yes' : null,
-        })
-    },
-    render_table:function(year){
-        const cells = tables.columns.map(f => {
-            return {
-                value:f.name,
-                highlight:false,
-                tooltip:f.desc,
-                is_calc:f.is_calc(),
-                code:f.code,
-            };
-        });
-        let prev_row = data.make_start_state();
-        // each row of data
-        return tag('div.year-table', [
-            tag('h2','Data for ' + year.year),
-            tag("table", [
-                tables.render_row(cells, true),
-                ...year.actions.map(a => {
-                    // each of the columns
-                    const vals = tables.columns.map(col => {
-                        const f = col.name;
-                        return {
-                            "value":a[f],
-                            "highlight":f != "desc" && a[f] != prev_row[f],
-                        };
-                    });
-                    prev_row = a;
-                    return tables.render_row(vals);
-                }),
-            ]),
-        ]);
-    },
-    render_row:(cells,header) => tag("tr", [
-        ...cells.map(cell => {
-            // regular row:
-            if(!header) return tag(cell.highlight ? 'td.highlight' : 'td', ''+cell.value);
-            // header row:
-            const parts = ['th'];
-            if(cell.is_calc) parts.push('calc');
-            if(cell.code.length > 0) parts.push('exists');
-            return tag(parts.join('.'), [
-                tag('a.tooltip', ''+cell.value, {'data-tooltip': cell.tooltip}, true),
-                gui.make_button('hide', this.hide_on_click),
-            ]);
-        }),
-    ]),
-    hide_on_click:function(){
-        const i = [...this.parentNode.parentNode.children].indexOf(this.parentNode);
-        if(i < tables.columns.length) tables.columns[i].hidden = true;
-        tables.hide_columns();
-    },
-    show_all_columns:function(){
-        tables.columns.forEach(c => c.hidden = false);
-        tables.hide_columns();
-    },
-    hide_columns:function(){
-        while(style.sheet.rules.length > 0) style.sheet.deleteRule(0);
-        tables.columns.forEach((f,i) =>{
-            if(f.hidden){
-                const n = i + 1;
-                style.sheet.addRule(`th:nth-child(${n}),td:nth-child(${n})`, 'display:none');
-            }
-        });
-    },
-    columns: [
-        new Column("desc", "What happened?"),
-        new Column("nha_preorder",  "Bulk Order Allocations for NHA - How many they think they're likely to order this year."),
-        new Column("pw_extra",  "Extra quantity that PW prints as a gamble."),
-        new Column("ordered", "SUM(soli.quantity) WHERE order.status > CART", null, product_service),
-        // production:
-        new Column("need_to_print", "MAX(nha_preorder + pw_extra, SUM(BO) + SUM(AO)) - produced", s => Math.max(s['nha_preorder'] + s['pw_extra'], s['ordered']) - s['produced']),
-        new Column("produced", "SUM(jobs.quantity)"),
-        new Column("in_production", "produced - received", s => s['produced'] - s['received']),
-        new Column("received", " ??? "),
-        // shipping:
-        new Column("packed", "SUM(scli.quantity) WHERE shipment.status = NOT SENT", null, product_service),
-        new Column("shipped", "SUM(scli.quantity) WHERE shipment.status = SENT", null, product_service),
-        // inventory:
-        new Column("inv_nha", "SUM(inventory_items.quantity_nha)", null, product_service),
-        new Column("inv_pw", "SUM(inventory_items.quantity_pageworks)", null, product_service),
-        // calculated from other fields:
-        new Column("to_pack", "ordered - shipped - packed", s => s['ordered'] - s['shipped'] - s['packed'], product_service),
-        new Column("to_ship", "ordered - shipped", s => s['ordered'] - s['shipped'], product_service),
-        new Column("to_receive", "produced - inv_nha - inv_pw - shipped - packed", s => s['produced'] - s['inv_nha'] - s['inv_pw'] - s['shipped'] - s['packed'], product_service),
-    ],
 };
 // the allocation wireframes
 const wireframes = {
@@ -702,7 +483,6 @@ const render_page = ()=> {
     clear(contents);
     child(contents, tag('h1', 'NHA simulator'));
     wireframes.render();
-    tables.render();
 };
 data.init();
 gui.render();
