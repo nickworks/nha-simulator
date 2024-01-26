@@ -1,0 +1,178 @@
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    font-size:10pt;
+    background:#DDD;
+    margin:0;
+}
+#toolbar {
+    margin:0;
+    background:#EEE;
+    padding:3px 5px;
+    position:fixed;
+    top:0;
+    left:0;
+    right:0;
+    box-shadow: 1px 1px 3px rgba(0,0,0,.25);
+}
+#toolbar .options {
+    float:right;
+    padding:0 10px;
+}
+#toolbar .options span {
+    padding:0 3px;
+}
+#contents {
+    padding:20px;
+}
+details.main {
+    background:#FFF;
+    padding:10px;
+    margin:10px 0;
+    border-radius:5px;
+}
+input.quantity {
+    width:50px;
+}
+label {
+    padding-right:5px;
+}
+table {
+    margin: 20px auto;
+}
+td,th {
+    border: 1px #ddd solid;
+}
+td.highlight {
+    background:#FEA;
+}
+th.exists {
+    background:rgb(170, 194, 255);
+}
+td.calc, th.calc {
+    border: 2px solid rgba(0,0,0,.5);
+}
+th {
+    padding:5px;
+}
+tr.year-head {
+    border:none;
+    border-top:1px solid rgba(0,0,0,.25);
+}
+tr.year-jobs {
+    border:none;
+}
+a.tooltip {
+    position:relative;
+    line-height:20px;
+}
+a.tooltip:before {
+    position: absolute;
+    bottom:20px;
+    left: 50%;
+    transform: translateX(-50%);
+    content:attr(data-tooltip);
+    display:none;
+    background:#DDD;
+    border-radius: 5px;
+    padding:5px;
+    white-space: nowrap;
+    font-weight: normal;
+    font-style: italic;
+    box-shadow: 1px 1px 3px rgba(0,0,0,0.5);
+}
+a.tooltip:hover:before {
+    display:block;
+}
+table.allocations {
+    border-collapse: collapse;
+    width:100%;
+    border:1px solid rgba(0,0,0,.25);
+}
+.allocations tr.head td {
+    background:#143762;
+    color:#FFF;
+}
+.allocations td,
+.allocations th {
+    border:0;
+    margin:0;
+    padding:5px 4px;
+}
+.allocations td:last-child {
+    text-align:right;
+}
+.allocations .jobs {
+    background: #DDD;
+    padding:10px;
+    box-shadow: inset 1px 1px 5px rgba(0,0,0,.25);
+}
+.allocations .job .header {
+    line-height:50px;
+    text-align:left;
+    padding:0 6px;
+    display:flex;
+    justify-content:space-between;
+    text-wrap:nowrap;
+}
+.allocations .header > .grow {
+    flex-grow: 1;
+}
+.allocations .header button {
+    border-radius: 3px;
+    background: #2d69bc;
+    color: #f5f8fc;
+    /*float:right;*/
+    border:none;
+    font-weight:bold;
+    cursor: pointer;
+    line-height: 36px;
+    margin:0;
+}
+.allocations .header .job-number {
+    font-weight: bold;
+    font-size: 110%;
+    padding-right:3px;
+}
+.allocations .num {
+    font-weight: bold;
+    display: inline-block;
+    min-width:50px;
+    text-align: right;
+}
+.pill.big {
+    text-transform: uppercase;
+    font-size:80%;
+    background:#e0e0e0;
+    padding:3px 8px;
+    border-radius:30px;
+    font-weight:bold;
+}
+.allocations .job {
+    background: #FFF;
+    padding:0;
+    margin:5px;
+    border-radius: 8px;
+    box-shadow: 1px 1px 5px rgba(0,0,0,.5);
+    overflow: hidden;
+    border: 1px solid rgba(0,0,0,.5);
+}
+.allocations .job .line {
+    font-size: 80%;
+    line-height: 2em;
+    border-top: 1px solid rgba(0,0,0,.15);
+    text-align:left;
+    padding:0 8px 0 6px;
+}
+.allocations .byline {
+    float: right;
+    font-style: italic;
+}
+.allocations .job .line.bulk-allocation {
+    background: #FEA;
+}
+.allocations .job .line.pw {
+    background: rgb(186, 209, 250);
+}
+.allocations .job .line.delegated {
+    background: rgb(255, 154, 186);
+}
