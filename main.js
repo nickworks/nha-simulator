@@ -10,7 +10,7 @@ const User = class {
 const Job = class {
     static RATE_BULK = 1;
     static RATE_ONDEMAND = 2;
-    constructor(user, qty, rate, allocations){
+    constructor(user, qty, rate){
         this.user = user;
         this.qty = qty;
         this.rate = rate;
@@ -19,21 +19,35 @@ const Job = class {
         this.update_timestamp();
         this.qty_printed = 0;
         this.number = parseInt(Math.random() * 1000000 + 1000000);
-        allocations?.forEach(a => this.add_allocation(a.qty, a));
     }
     update_timestamp(){
         this.timestamp = Date.now();
     }
-    qty_allocated(){
+    qty_allocated_ondemand(){
         let amount = 0;
         this.allocations.forEach(a => {
             if(this.is_printed && this.timestamp < a.obj.timestamp) return;
             if(this.rate == Job.RATE_BULK) {
-                if(a.obj.type == Allocation.TYPE_ORDER && a.obj.order.type == Order.TYPE_BULK) amount += a.amt;
-                if(a.obj.type == Allocation.TYPE_EXTRA_NHA) amount += a.amt;
+                // "PW extra" allocations in a BULK job have ON-DEMAND pricing
+                if(a.obj.type == Allocation.TYPE_EXTRA_PW) amount += a.amt_pw;
             } else {
-                if(a.obj.type == Allocation.TYPE_ORDER && a.obj.order.type == Order.TYPE_ADDITIONAL) amount += a.amt;
-                if(a.obj.type == Allocation.TYPE_EXTRA_PW) amount += a.amt;
+                // any allocations in an ON-DEMAND job have ON-DEMAND pricing
+                amount += a.amt_nha;
+                amount += a.amt_pw;
+            }
+        });
+        return amount;
+    }
+    qty_allocated_bulk(){
+        let amount = 0;
+        this.allocations.forEach(a => {
+            if(this.is_printed && this.timestamp < a.obj.timestamp) return;
+            if(this.rate == Job.RATE_BULK) {
+                // most allocations in a BULK job have BULK pricing
+                if(a.obj.type == Allocation.TYPE_ORDER) amount += a.amt_pw + a.amt_nha;
+                if(a.obj.type == Allocation.TYPE_EXTRA_NHA) amount += a.amt_nha;
+            } else {
+                // no allocations in an ON-DEMAND job has BULK pricing
             }
         });
         return amount;
@@ -42,32 +56,79 @@ const Job = class {
         let amount = 0;
         this.allocations.forEach(a => {
             if(this.is_printed && this.timestamp < a.obj.timestamp) return;
-            if(a.obj.type == Allocation.TYPE_EXTRA_NHA) amount += a.amt;
-            if(a.obj.type == Allocation.TYPE_EXTRA_PW) amount += a.amt;
+            if(a.obj.type == Allocation.TYPE_EXTRA_NHA) amount += a.amt_nha;
+            if(a.obj.type == Allocation.TYPE_EXTRA_PW) amount += a.amt_pw;
         });
         return amount;
     }
-    qty_to_print(){
+    qty_extra_printed_nha(){
         let amount = 0;
         this.allocations.forEach(a => {
-            amount += a.amt;
+            if(this.is_printed && this.timestamp < a.obj.timestamp) return;
+            if(a.obj.type == Allocation.TYPE_EXTRA_NHA) amount += a.amt_nha;
+        });
+        return amount;
+    }
+    qty_extra_printed_pw(){
+        let amount = 0;
+        this.allocations.forEach(a => {
+            if(this.is_printed && this.timestamp < a.obj.timestamp) return;
+            if(a.obj.type == Allocation.TYPE_EXTRA_PW) amount += a.amt_pw;
+        });
+        return amount;
+    }
+    qty_undelegated_nha(){
+        let amount = 0;
+        this.allocations.forEach(a => {
+            if(a.obj.type == Allocation.TYPE_EXTRA_NHA) amount += a.amt_nha;
+            if(a.obj.type == Allocation.TYPE_ORDER){
+                if(this.timestamp < a.obj.timestamp) amount -= a.amt_nha;
+            }
+        });
+        return amount < 0 ? 0 : amount;
+    }
+    qty_undelegated_pw(){
+        let amount = 0;
+        this.allocations.forEach(a => {
+            if(this.is_printed && this.timestamp < a.obj.timestamp) {
+                amount -= a.amt_pw;
+            } else {
+                amount += a.amt_pw;
+            }
+        });
+        return amount < 0 ? 0 : amount;
+    }
+    qty_to_print(){
+        if(this.is_printed) return 0;
+        // if the job isn't printed,
+        // add up all existing allocations
+        let amount = 0;
+        this.allocations.forEach(a => {
+            amount += a.amt_pw;
+            amount += a.amt_nha;
         });
         return amount;
     }
     qty_soaked_up(){
         let amount = 0;
+        // any allocations after the timestamp count as
+        // absorbing the extra quantity from this already printed order
         this.allocations.forEach(a => {
             if(this.is_printed && this.timestamp > a.obj.timestamp) return;
-            if(a.obj.type == Allocation.TYPE_ORDER) amount += a.amt;
+            if(a.obj.type == Allocation.TYPE_ORDER) {
+                amount += a.amt_pw;
+                amount += a.amt_nha;
+            }
         });
         return amount;
     }
-    add_allocation(qty, allocation){
+    add_allocation_pivot(qty_nha, qty_pw, allocation){
         this.allocations.push({
             obj:allocation,
-            amt:qty,
+            amt_nha:parseInt(qty_nha),
+            amt_pw:parseInt(qty_pw),
             line_type_desc: function(job_timestamp){
-                return this.obj.desc_from_pivot(this.amt, job_timestamp);
+                return this.obj.desc_from_pivot(this, job_timestamp);
             },
         });
     }
@@ -78,15 +139,17 @@ const Job = class {
     }
     line_type_desc(){
         const timestamp = new Date(this.timestamp).toLocaleTimeString('en-us', { hour:"numeric", minute:"numeric", second:"numeric" });
-        return tag('span', [
-            tag('span.num', ''+this.qty_printed),
-            tag('span', ' printed'),
+        return [
+            tag('span', [
+                tag('span.num', ''+this.qty_printed),
+                tag('span', ' printed'),
+            ]),
             tag("span.byline", [
                 tag("span", "by "),
                 tag("a", this.user, {"href":"#"}),
                 tag("span", " at " + timestamp),
             ]),
-        ]);
+        ];
     }
     line_type_classes(){
         return ['pw'];
@@ -104,26 +167,38 @@ const Allocation = class {
         this.timestamp = Date.now();
         this.user = user;
     }
-    desc_from_pivot(qty, job_timestamp){
-        let parts = [tag('span.num', '' + (qty ?? this.qty))];
+    desc_from_pivot(pivot, job_timestamp){
+        const amount = pivot.amt_nha + pivot.amt_pw;
+        let parts = [tag('span.num', '' + amount)];
+        let middle = [];
         const timestamp = new Date(this.timestamp).toLocaleTimeString('en-us', { hour:"numeric", minute:"numeric", second:"numeric" });
         switch(this.type){
             case Allocation.TYPE_ORDER:
                 const order_type = (this.order.type == Order.TYPE_BULK) ? "Bulk" : "Additional"
                 parts.push(tag('span', ' for '+ order_type +' order '), tag('a', '#'+this.order.number, {'href':'#'}));
-                if(timestamp > job_timestamp){
-                    // TODO: show how much was soaked up: NHA or PW
+                if(this.timestamp > job_timestamp){
+                    if(pivot.amt_nha > 0) middle.push(tag('span.pad-sides'), [
+                        tag('span', pivot.amt_nha + ' at '),
+                        tag('span.pill', ' bulk '),
+                    ]);
+                    if(pivot.amt_pw > 0) middle.push(tag('span.pad-sides'), [
+                        tag('span', pivot.amt_pw + ' at '),
+                        tag('span.pill', ' on-demand '),
+                    ]);
                 }
                 break;
             case Allocation.TYPE_EXTRA_NHA: parts.push(tag('span', ' extra allocated for NHA')); break;
             case Allocation.TYPE_EXTRA_PW:  parts.push(tag('span', ' extra allocated for Pageworks')); break;
         }
-        parts.push(tag("span.byline", [
-            tag("span", "by "),
-            tag("a", this.user, {"href":"#"}),
-            tag("span", " at " + timestamp),
-        ]));
-        return tag('span', parts);
+        return [
+            tag('span', parts),
+            tag('span', middle),
+            tag("span.byline", [
+                tag("span", "by "),
+                tag("a", this.user, {"href":"#"}),
+                tag("span", " at " + timestamp),
+            ])
+        ];
     }
     line_type_classes(job_timestamp){
         if(this.type == Allocation.TYPE_EXTRA_PW) return ['pw'];
@@ -176,34 +251,45 @@ const Year = class {
         // it only needs to parse a single year's data
         const jobs = this.jobs.slice();
         const RATE = jobs.length > 0 ? Job.RATE_ONDEMAND : Job.RATE_BULK;
-        const unprinted_job = new Job(data.current_user, 0, RATE, []);
+        const unprinted_job = new Job(data.current_user, 0, RATE);
         this.allocations.forEach(a => {
-            let delegated_to_jobs = 0;
+            let left_to_delegate = a.qty;
             jobs.forEach(j => {
-                let printed_but_unallocated = j.qty_extra_printed() - j.qty_soaked_up();
+                let available_pw = j.qty_undelegated_pw();
+                let available_nha = j.qty_undelegated_nha();
                 const pivot = j.allocations.filter(a2 => a2.obj == a)[0]??null;
                 if(pivot){
-                    // job already has a portion of this allocation
-                    delegated_to_jobs += pivot.amt;
-                    printed_but_unallocated -= pivot.amt;
-                } else if (printed_but_unallocated > 0) {
-                    // if the job can absorb some of the allocation
-                    // determine how much could be delegated to this job
-                    let take = Math.min(printed_but_unallocated, a.qty);
-                    printed_but_unallocated -= take;
-                    delegated_to_jobs += take;
-                    j.add_allocation(take, a);
+                    // if allocation is already delegated to this job ...
+                    const delegated_amount = pivot.amt_nha + pivot.amt_pw;
+                    left_to_delegate -= delegated_amount;
+                    available_nha -= pivot.amt_nha;
+                    available_pw -= pivot.amt_pw;
+                } else if (left_to_delegate > 0 && (available_pw > 0 || available_nha > 0)) {
+                    // if (there is quantity left to delegate && this job can absorb some of it) ...
+                    // determine how much could be delegated to this job ("soaked up")
+                    let take_nha = Math.min(available_nha, left_to_delegate);
+                    left_to_delegate -= take_nha;
+                    available_nha -= take_nha;
+                    let take_pw = Math.min(available_pw, left_to_delegate);
+                    left_to_delegate -= take_pw;
+                    available_pw -= take_pw;
+                    j.add_allocation_pivot(take_nha, take_pw, a);
                 }
             });
-            // how much is left to delegate of this allocation
-            const remainder_to_delegate = a.qty - delegated_to_jobs;
             // add any remainder to the unprinted job
-            if(remainder_to_delegate > 0) {
+            if(left_to_delegate > 0) {
                 // if job contains a bulk order, the job is at the bulk rate
                 if(a.type == Allocation.TYPE_ORDER && a.order.type == Order.TYPE_BULK) {
                     unprinted_job.rate = Job.RATE_BULK;
                 }
-                unprinted_job.add_allocation(remainder_to_delegate, a);
+                let delegate_nha = 0;
+                let delegate_pw = 0;
+                if(a.type == Allocation.TYPE_EXTRA_PW){
+                    delegate_pw = left_to_delegate;
+                } else {
+                    delegate_nha = left_to_delegate;
+                }
+                unprinted_job.add_allocation_pivot(delegate_nha, delegate_pw, a);
             }
         });
         return return_unprinted_job ? unprinted_job : [...jobs, unprinted_job];
@@ -233,7 +319,8 @@ const Year = class {
         const amount = window.prompt("Print how much?" + secondPart + "\n • 0 to cancel", q);
         if (amount > 0) {
             if(amount > q){
-                job.add_allocation(amount - q, new Allocation(data.current_user, amount - q, Allocation.TYPE_EXTRA_PW));
+                const extra_for_pw = amount - q;
+                job.add_allocation_pivot(0, extra_for_pw, new Allocation(data.current_user, extra_for_pw, Allocation.TYPE_EXTRA_PW));
             }
             job.print(amount);
             this.add_job(job);
@@ -281,14 +368,21 @@ const Year = class {
                 const allocate_text = job.allocations.filter(a => a.obj.type == Allocation.TYPE_EXTRA_NHA).length == 0 ? "Allocate More" : "Edit Allocation";
 
                 let pricing = '';
+                let amount_allocated_at_pricing = 0;
                 switch(job.rate){
-                    case Job.RATE_BULK: pricing = 'bulk'; break;
-                    case Job.RATE_ONDEMAND: pricing = 'on-demand'; break;
+                    case Job.RATE_BULK:
+                        pricing = 'bulk';
+                        amount_allocated_at_pricing = job.qty_allocated_bulk();
+                        break;
+                    case Job.RATE_ONDEMAND:
+                        pricing = 'on-demand';
+                        job.qty_allocated_ondemand()
+                        break;
                 }
                 return tag('div.job', [
                     tag('div.header', [
                         tag('span.grow', [
-                            tag('span.num', ''+job.qty_allocated()),
+                            tag('span.num', ''+amount_allocated_at_pricing),
                             tag('span', ' allocated at '),
                             tag('span.pill.big', pricing),
                             tag('span', ' pricing'),
@@ -473,7 +567,8 @@ const wireframes = {
     },
 };
 const render_page = ()=> {
-    //console.log(data);
+    //const j = data.by_year['2023-24'].jobs;
+    //console.log(j[j.length -1]?.allocations.length??'none');
     clear(contents);
     child(contents, tag('h1', 'NHA simulator'));
     wireframes.render();

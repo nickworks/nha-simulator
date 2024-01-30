@@ -139,13 +139,22 @@ table.allocations {
     min-width:50px;
     text-align: right;
 }
-.pill.big {
+.pill {
     text-transform: uppercase;
     font-size:80%;
-    background:#e0e0e0;
-    padding:3px 8px;
+    background:#7f7f7f;
+    padding:2px 4px;
     border-radius:30px;
     font-weight:bold;
+    color:#FFF;
+}
+.pill.big {
+    background:#e0e0e0;
+    padding:3px 8px;
+    color:#000;
+}
+.pad-sides {
+    padding:0 5px;
 }
 .allocations .job {
     background: #FFF;
@@ -162,6 +171,9 @@ table.allocations {
     border-top: 1px solid rgba(0,0,0,.15);
     text-align:left;
     padding:0 8px 0 6px;
+    display: flex;
+    justify-content: space-between;
+    text-wrap: nowrap;
 }
 .allocations .byline {
     float: right;
@@ -171,8 +183,8 @@ table.allocations {
     background: #FEA;
 }
 .allocations .job .line.pw {
-    background: rgb(186, 209, 250);
+    background: #ffccd9;
 }
 .allocations .job .line.delegated {
-    background: rgb(255, 154, 186);
+    background: #e2e4f3;
 }
