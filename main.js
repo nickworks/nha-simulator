@@ -23,6 +23,7 @@ const Job = class {
     update_timestamp(){
         this.timestamp = Date.now();
     }
+    /** The total number of allocated units that aren't guaranteed bulk-pricing. */
     qty_allocated_ondemand(){
         let amount = 0;
         this.allocations.forEach(a => {
@@ -38,6 +39,7 @@ const Job = class {
         });
         return amount;
     }
+    /** The total number of allocated units that are guaranteed at bulk pricing. */
     qty_allocated_bulk(){
         let amount = 0;
         this.allocations.forEach(a => {
@@ -52,6 +54,7 @@ const Job = class {
         });
         return amount;
     }
+    /** The total number of extra allocated units. */
     qty_extra_printed(){
         let amount = 0;
         this.allocations.forEach(a => {
@@ -61,6 +64,7 @@ const Job = class {
         });
         return amount;
     }
+    /** The total number of extra NHA-allocated units. */
     qty_extra_printed_nha(){
         let amount = 0;
         this.allocations.forEach(a => {
@@ -69,6 +73,7 @@ const Job = class {
         });
         return amount;
     }
+    /** The total number of extra PW-allocated units. */
     qty_extra_printed_pw(){
         let amount = 0;
         this.allocations.forEach(a => {
@@ -77,6 +82,7 @@ const Job = class {
         });
         return amount;
     }
+    /** The number of extra NHA-allocated units that aren't tied to an order yet. */
     qty_undelegated_nha(){
         let amount = 0;
         this.allocations.forEach(a => {
@@ -87,6 +93,7 @@ const Job = class {
         });
         return amount < 0 ? 0 : amount;
     }
+    /** The number of extra PW-allocated units that aren't tied to an order yet. */
     qty_undelegated_pw(){
         let amount = 0;
         this.allocations.forEach(a => {
@@ -98,6 +105,7 @@ const Job = class {
         });
         return amount < 0 ? 0 : amount;
     }
+    /** The number of units this jobs currently has allocated to print. If the job is printed, this method will return 0. */
     qty_to_print(){
         if(this.is_printed) return 0;
         // if the job isn't printed,
@@ -109,6 +117,7 @@ const Job = class {
         });
         return amount;
     }
+    /** The number of extra allocated units that are tied to an order. */
     qty_soaked_up(){
         let amount = 0;
         // any allocations after the timestamp count as
@@ -122,6 +131,12 @@ const Job = class {
         });
         return amount;
     }
+    /**
+     * Delegate an Allocation to this Job. If the Job isn't yet printed,
+     * then the Allocation counts towards how much needs to be printed.
+     * After the Job has been printed, any delegated allocations count as the
+     * Job using its extra quantity to absorb a portion of the Allocation.
+     */
     add_allocation_pivot(qty_nha, qty_pw, allocation){
         this.allocations.push({
             obj:allocation,
@@ -132,27 +147,31 @@ const Job = class {
             },
         });
     }
+    /**
+     * The job is marked as having been printed. The timestamp and qty_printed are updated.
+     */
     print(qty){
+        if(this.is_printed) return;
         this.is_printed = true;
         this.qty_printed = qty ? parseInt(qty) : this.qty_to_print();
         this.update_timestamp();
     }
-    line_type_desc(){
-        const timestamp = new Date(this.timestamp).toLocaleTimeString('en-us', { hour:"numeric", minute:"numeric", second:"numeric" });
-        return [
-            tag('span', [
-                tag('span.num', ''+this.qty_printed),
-                tag('span', ' printed'),
-            ]),
-            tag("span.byline", [
-                tag("span", "by "),
-                tag("a", this.user, {"href":"#"}),
-                tag("span", " at " + timestamp),
-            ]),
-        ];
-    }
-    line_type_classes(){
-        return ['pw'];
+    render_history_item(){
+        const when = new Date(this.timestamp).toLocaleTimeString('en-us', { hour:"numeric", minute:"numeric", second:"numeric" });
+        return tag('div.line.pw',
+            [
+                tag('span', [
+                    tag('span.num', ''+this.qty_printed),
+                    tag('span', ' printed'),
+                ]),
+                tag("span.byline", [
+                    tag("span", "by "),
+                    tag("a", this.user, {"href":"#"}),
+                    tag("span", " at " + when),
+                ]),
+            ],
+            {'data-timestamp':this.timestamp},
+        );
     }
 };
 const Allocation = class {
@@ -167,47 +186,66 @@ const Allocation = class {
         this.timestamp = Date.now();
         this.user = user;
     }
-    desc_from_pivot(pivot, job_timestamp){
+    render_history_items(pivot, job_timestamp){
+        let classes = ['bulk-allocation'];
+        if(this.type == Allocation.TYPE_EXTRA_PW) classes = ['pw'];
+        if(this.timestamp > job_timestamp) classes = ['delegated'];
+        const when = new Date(this.timestamp).toLocaleTimeString('en-us', { hour:"numeric", minute:"numeric", second:"numeric" });
         const amount = pivot.amt_nha + pivot.amt_pw;
         let parts = [tag('span.num', '' + amount)];
         let middle = [];
-        const timestamp = new Date(this.timestamp).toLocaleTimeString('en-us', { hour:"numeric", minute:"numeric", second:"numeric" });
+        const doConversion = this.type == Allocation.TYPE_ORDER && this.order.type == Order.TYPE_BULK && pivot.amt_pw > 0;
         switch(this.type){
             case Allocation.TYPE_ORDER:
-                const order_type = (this.order.type == Order.TYPE_BULK) ? "Bulk" : "Additional"
-                parts.push(tag('span', ' for '+ order_type +' order '), tag('a', '#'+this.order.number, {'href':'#'}));
+                parts.push(
+                    tag('span', ' for '+ (this.order.type == Order.TYPE_BULK ? 'Bulk' : 'Additional') +' order '),
+                    tag('a', '#'+this.order.number, {'href':'#'}),
+                );
                 if(this.timestamp > job_timestamp){
                     if(pivot.amt_nha > 0) middle.push(tag('span.pad-sides'), [
                         tag('span', pivot.amt_nha + ' at '),
                         tag('span.pill', ' bulk '),
                     ]);
-                    if(pivot.amt_pw > 0) middle.push(tag('span.pad-sides'), [
-                        tag('span', pivot.amt_pw + ' at '),
-                        tag('span.pill', ' on-demand '),
-                    ]);
+                    if(pivot.amt_pw > 0) middle.push(tag('span.pad-sides'), 
+                        doConversion ? [
+                            tag('span', pivot.amt_pw + ' from PW at '),
+                            tag('span.pill', ' bulk '),
+                        ] : [
+                            tag('span', pivot.amt_pw + ' at '),
+                            tag('span.pill', ' on-demand '),
+                        ],
+                    );
                 }
                 break;
             case Allocation.TYPE_EXTRA_NHA: parts.push(tag('span', ' extra allocated for NHA')); break;
             case Allocation.TYPE_EXTRA_PW:  parts.push(tag('span', ' extra allocated for Pageworks')); break;
         }
         return [
-            tag('span', parts),
-            tag('span', middle),
-            tag("span.byline", [
-                tag("span", "by "),
-                tag("a", this.user, {"href":"#"}),
-                tag("span", " at " + timestamp),
-            ])
+            doConversion ? tag('div.line.pw', [
+                    tag('span', [
+                        tag('span.num', '' + pivot.amt_pw),
+                        tag('span', ' converted from PW to NHA'),
+                    ]),
+                    tag("span.byline", [
+                        tag("span", "by "),
+                        tag("a", this.user, {"href":"#"}),
+                        tag("span", " at " + when),
+                    ])
+                ],
+                {'data-timestamp':this.timestamp},
+            ) : null,
+            tag([ 'div.line', ...classes ].join('.'), [
+                    tag('span', parts),
+                    tag('span', middle),
+                    tag("span.byline", [
+                        tag("span", "by "),
+                        tag("a", this.user, {"href":"#"}),
+                        tag("span", " at " + when),
+                    ])
+                ],
+                {'data-timestamp':this.timestamp + 1},
+            ),
         ];
-    }
-    line_type_classes(job_timestamp){
-        if(this.type == Allocation.TYPE_EXTRA_PW) return ['pw'];
-        
-        // if timestamp of allocation is after the job timestamp (time of printing),
-        // the allocation must be here to soak up extra allocated units
-        if(this.timestamp > job_timestamp) return ['delegated'];
-
-        return ['bulk-allocation'];
     }
 };
 const Order = class {
@@ -322,23 +360,15 @@ const Year = class {
                 const extra_for_pw = amount - q;
                 job.add_allocation_pivot(0, extra_for_pw, new Allocation(data.current_user, extra_for_pw, Allocation.TYPE_EXTRA_PW));
             }
-            job.print(amount);
             this.add_job(job);
-            render_page();
+            setTimeout(() => {
+                job.print(amount);
+                render_page();
+            }, 50);
         }
     }
     // #endregion
     // #region Rendering html
-    render_history_item(classes, desc, timestamp){
-        return tag(
-            [
-                'div.line',
-                ...classes,
-            ].join('.'),
-            desc,
-            {'data-timestamp':timestamp},
-        );
-    }
     render(){
         let i = 0;
         const year = this;
@@ -347,14 +377,14 @@ const Year = class {
         const data_row = tag('tr.year-jobs', [
             tag('td.jobs', jobs.map(job => {
                 i++;
-                const lineItems = [
-                    // render the allocations delegated to this job
-                    ...job.allocations.map(a => {
-                        return this.render_history_item(a.obj.line_type_classes(job.timestamp), a.line_type_desc(job.timestamp), a.obj.timestamp);
-                    }),
+                const history = [
                     // render the printings of this job
-                    job.is_printed ? this.render_history_item(job.line_type_classes(), job.line_type_desc(), job.timestamp) : null,
-                ]
+                    job.is_printed ? job.render_history_item() : null,
+                ];
+                // render the allocations delegated to this job
+                job.allocations.forEach(a => history.push(...a.obj.render_history_items(a, job.timestamp)));
+                
+                const lineItems = history
                 .filter(item => item != null)
                 .sort((a, b) => { 
                     // sort by timestamp
